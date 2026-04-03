@@ -5,6 +5,7 @@ const remote = require('@electron/remote')
 
 const { dispatch } = require('../lib/dispatcher')
 const { TorrentKeyNotFoundError } = require('../lib/errors')
+const { peekTorrentId, applyPeekToSummary } = require('../lib/peek-torrent')
 const sound = require('../lib/sound')
 const TorrentSummary = require('../lib/torrent-summary')
 
@@ -16,7 +17,7 @@ module.exports = class TorrentListController {
     this.state = state
   }
 
-  // Adds a torrent to the list, starts downloading/seeding.
+  // Adds a torrent to the list. FIFO queue: stays queued until earlier torrents finish.
   // TorrentID can be a magnet URI, infohash, or torrent file: https://git.io/vik9M
   addTorrent (torrentId) {
     if (torrentId.path) {
@@ -34,10 +35,47 @@ module.exports = class TorrentListController {
       torrentId = torrentId.slice(torrentId.indexOf('#') + 1)
     }
 
-    const torrentKey = this.state.nextTorrentKey++
-    const path = this.state.saved.prefs.downloadPath
+    if (typeof torrentId === 'string' && !torrentId) return
 
-    ipcRenderer.send('wt-start-torrenting', torrentKey, torrentId, path)
+    const torrentKey = this.state.nextTorrentKey++
+    const downloadPath = this.state.saved.prefs.downloadPath
+
+    const summary = {
+      torrentKey,
+      status: 'queued',
+      pendingTorrentId: torrentId
+    }
+    this.state.saved.torrents.push(summary)
+    sound.play('ADD')
+
+    peekTorrentId(torrentId, (err, peek) => {
+      const s = TorrentSummary.getByKey(this.state, torrentKey)
+      if (!s) return
+
+      if (peek && !err) {
+        applyPeekToSummary(s, torrentId, peek)
+        const duplicate = this.state.saved.torrents.find((t) =>
+          t !== s && s.infoHash && TorrentSummary.infoHashesEqual(t.infoHash, s.infoHash))
+        if (duplicate) {
+          const idx = this.state.saved.torrents.indexOf(s)
+          if (idx !== -1) this.state.saved.torrents.splice(idx, 1)
+          dispatch('error', 'Cannot add duplicate torrent')
+          dispatch('update')
+          return
+        }
+      }
+
+      if (!this.hasEarlierNotFinished(s)) {
+        s.status = 'new'
+        delete s.pendingTorrentId
+        if (this.hasAnyOtherDownloading(torrentKey)) {
+          this.pauseOtherActiveTorrents(torrentKey)
+        }
+        ipcRenderer.send('wt-start-torrenting', torrentKey, torrentId, downloadPath)
+      }
+
+      dispatch('update')
+    })
 
     dispatch('backToList')
   }
@@ -68,22 +106,58 @@ module.exports = class TorrentListController {
     findFilesRecursive(files, (allFiles) => this.showCreateTorrent(allFiles))
   }
 
-  // Creates a new torrent and start seeeding
+  // Creates a new torrent (seed). Queued like downloads when earlier torrents are not finished.
   createTorrent (options) {
     const state = this.state
     const torrentKey = state.nextTorrentKey++
-    ipcRenderer.send('wt-create-torrent', torrentKey, options)
+    const summary = {
+      torrentKey,
+      status: 'queued',
+      pendingCreateOptions: options
+    }
+    state.saved.torrents.push(summary)
+    sound.play('ADD')
+
+    if (!this.hasEarlierNotFinished(summary)) {
+      summary.status = 'new'
+      delete summary.pendingCreateOptions
+      if (this.hasAnyOtherDownloading(torrentKey)) {
+        this.pauseOtherActiveTorrents(torrentKey)
+      }
+      ipcRenderer.send('wt-create-torrent', torrentKey, options)
+    }
+
     state.location.cancel()
   }
 
-  // Starts downloading and/or seeding a given torrentSummary.
-  startTorrentingSummary (torrentKey) {
+  // Starts downloading a given torrentSummary (playback may bypass the FIFO queue).
+  startTorrentingSummary (torrentKey, opts = {}) {
     const s = TorrentSummary.getByKey(this.state, torrentKey)
     if (!s) throw new TorrentKeyNotFoundError(torrentKey)
 
+    if (s.status === 'queued') {
+      return
+    }
+
+    const bypassQueue = opts.bypassQueue === true
+    if (!bypassQueue && this.hasEarlierNotFinished(s)) {
+      return
+    }
+
+    const start = () => {
+      if (this.hasAnyOtherDownloading(s.torrentKey)) {
+        this.pauseOtherActiveTorrents(s.torrentKey)
+      }
+      ipcRenderer.send('wt-start-torrenting',
+        s.torrentKey,
+        TorrentSummary.getTorrentId(s),
+        s.path,
+        s.fileModtimes,
+        s.selections)
+    }
+
     // New torrent: give it a path
     if (!s.path) {
-      // Use Downloads folder by default
       s.path = this.state.saved.prefs.downloadPath
       return start()
     }
@@ -102,15 +176,85 @@ module.exports = class TorrentListController {
       }
       start()
     })
+  }
 
-    function start () {
-      ipcRenderer.send('wt-start-torrenting',
-        s.torrentKey,
-        TorrentSummary.getTorrentId(s),
-        s.path,
-        s.fileModtimes,
-        s.selections)
+  // True if any earlier list entry still needs the queue (still downloading or waiting ahead of this one).
+  hasEarlierNotFinished (torrentSummary) {
+    const torrents = this.state.saved.torrents
+    const i = torrents.indexOf(torrentSummary)
+    // indexOf === -1 must block: (-1 <= 0) is true in JS and wrongly treated "no earlier work" before.
+    if (i < 0) return true
+    if (i === 0) return false
+    for (let j = 0; j < i; j++) {
+      if (!this.torrentQueueSlotClear(torrents[j])) return true
     }
+    return false
+  }
+
+  // Earlier slots are "clear" when they are not actively using the download slot:
+  // finished, or paused (user paused — next queued torrent may start).
+  torrentQueueSlotClear (t) {
+    if (!t) return true
+    if (t.status === 'finished') return true
+    if (t.status === 'paused') return true
+    if (t.status === 'downloading' || t.status === 'new' || t.status === 'queued') return false
+    if (t.status === 'seeding') return false
+    return false
+  }
+
+  hasAnyOtherDownloading (keepTorrentKey) {
+    const k = String(keepTorrentKey)
+    return this.state.saved.torrents.some(
+      (t) => String(t.torrentKey) !== k && t.status === 'downloading'
+    )
+  }
+
+  torrentNeedsDownload (torrentSummary) {
+    const p = torrentSummary.progress
+    return !p || p.progress < 1
+  }
+
+  processDownloadQueue () {
+    for (const t of this.state.saved.torrents) {
+      if (t.status !== 'queued') continue
+      if (this.hasEarlierNotFinished(t)) continue
+      if (this.activateQueuedTorrent(t)) return
+    }
+  }
+
+  /**
+   * Move a queued torrent into WebTorrent (pause any other downloader first).
+   * @returns {boolean} true if this summary was started
+   */
+  activateQueuedTorrent (t, options = {}) {
+    const downloadPath = this.state.saved.prefs.downloadPath
+    const key = t.torrentKey
+
+    if (t.pendingTorrentId) {
+      const id = t.pendingTorrentId
+      delete t.pendingTorrentId
+      t.status = 'new'
+      if (this.hasAnyOtherDownloading(key)) {
+        this.pauseOtherActiveTorrents(key)
+      }
+      ipcRenderer.send('wt-start-torrenting', key, id, downloadPath)
+      if (options.playSound) sound.play('ENABLE')
+      return true
+    }
+
+    if (t.pendingCreateOptions) {
+      const opts = t.pendingCreateOptions
+      delete t.pendingCreateOptions
+      t.status = 'new'
+      if (this.hasAnyOtherDownloading(key)) {
+        this.pauseOtherActiveTorrents(key)
+      }
+      ipcRenderer.send('wt-create-torrent', key, opts)
+      if (options.playSound) sound.play('ENABLE')
+      return true
+    }
+
+    return false
   }
 
   setGlobalTrackers (globalTrackers) {
@@ -120,7 +264,20 @@ module.exports = class TorrentListController {
   // TODO: use torrentKey, not infoHash
   toggleTorrent (infoHash) {
     const torrentSummary = TorrentSummary.getByKey(this.state, infoHash)
+    if (torrentSummary.status === 'finished') {
+      return dispatch('error', 'This download is already complete.')
+    }
+    if (torrentSummary.status === 'queued') {
+      if (!this.activateQueuedTorrent(torrentSummary, { playSound: true })) {
+        return dispatch('error', 'Torrent is still loading. Try again in a moment.')
+      }
+      dispatch('update')
+      return
+    }
     if (torrentSummary.status === 'paused') {
+      if (this.hasEarlierNotFinished(torrentSummary)) {
+        return dispatch('error', 'Wait for earlier torrents to finish downloading.')
+      }
       torrentSummary.status = 'new'
       this.startTorrentingSummary(torrentSummary.torrentKey)
       sound.play('ENABLE')
@@ -132,8 +289,7 @@ module.exports = class TorrentListController {
 
   pauseAllTorrents () {
     this.state.saved.torrents.forEach((torrentSummary) => {
-      if (torrentSummary.status === 'downloading' ||
-          torrentSummary.status === 'seeding') {
+      if (torrentSummary.status === 'downloading') {
         torrentSummary.status = 'paused'
         ipcRenderer.send('wt-stop-torrenting', torrentSummary.infoHash)
       }
@@ -142,30 +298,47 @@ module.exports = class TorrentListController {
   }
 
   resumeAllTorrents () {
-    this.state.saved.torrents.forEach((torrentSummary) => {
-      if (torrentSummary.status === 'paused') {
-        torrentSummary.status = 'downloading'
-        this.startTorrentingSummary(torrentSummary.torrentKey)
-      }
-    })
-    sound.play('ENABLE')
+    for (const t of this.state.saved.torrents) {
+      if (t.status !== 'paused' || !this.torrentNeedsDownload(t)) continue
+      if (this.hasEarlierNotFinished(t)) continue
+      t.status = 'downloading'
+      this.startTorrentingSummary(t.torrentKey)
+      sound.play('ENABLE')
+      return
+    }
   }
 
-  pauseTorrent (torrentSummary, playSound) {
+  pauseTorrent (torrentSummary, playSound, options = {}) {
+    const wasDownloading = torrentSummary.status === 'downloading'
     torrentSummary.status = 'paused'
     ipcRenderer.send('wt-stop-torrenting', torrentSummary.infoHash)
 
     if (playSound) sound.play('DISABLE')
+
+    if (wasDownloading && !options.skipQueueAdvance) {
+      dispatch('processDownloadQueue')
+    }
+  }
+
+  // Only one torrent may download at a time; pause the rest (no playback queue).
+  pauseOtherActiveTorrents (keepTorrentKey) {
+    const keep = String(keepTorrentKey)
+    this.state.saved.torrents.forEach((torrentSummary) => {
+      if (String(torrentSummary.torrentKey) === keep) return
+      if (torrentSummary.status === 'downloading') {
+        this.pauseTorrent(torrentSummary, false, { skipQueueAdvance: true })
+      }
+    })
   }
 
   prioritizeTorrent (infoHash) {
     this.state.saved.torrents
-      .filter(torrent => ['downloading', 'seeding'].includes(torrent.status)) // Active torrents only.
+      .filter(torrent => torrent.status === 'downloading') // Active torrents only.
       .forEach((torrent) => { // Pause all active torrents except the one that started playing.
         if (infoHash === torrent.infoHash) return
 
         // Pause torrent without playing sounds.
-        this.pauseTorrent(torrent, false)
+        this.pauseTorrent(torrent, false, { skipQueueAdvance: true })
 
         this.state.saved.torrentsToResume.push(torrent.infoHash)
       })
@@ -176,20 +349,19 @@ module.exports = class TorrentListController {
   resumePausedTorrents () {
     console.log('Playback Priority: resuming paused torrents')
     if (!this.state.saved.torrentsToResume || !this.state.saved.torrentsToResume.length) return
-    this.state.saved.torrentsToResume.forEach((infoHash) => {
-      this.toggleTorrent(infoHash)
-    })
-
-    // reset paused torrents
+    const [first] = this.state.saved.torrentsToResume
     this.state.saved.torrentsToResume = []
+    // One torrent at a time: resume only the first queued torrent; others stay paused.
+    this.toggleTorrent(first)
   }
 
   toggleTorrentFile (infoHash, index) {
     const torrentSummary = TorrentSummary.getByKey(this.state, infoHash)
+    if (!torrentSummary.selections) return
     torrentSummary.selections[index] = !torrentSummary.selections[index]
 
     // Let the WebTorrent process know to start or stop fetching that file
-    if (torrentSummary.status !== 'paused') {
+    if (torrentSummary.status !== 'paused' && torrentSummary.status !== 'queued' && torrentSummary.status !== 'finished') {
       ipcRenderer.send('wt-select-files', infoHash, torrentSummary.selections)
     }
   }
@@ -220,6 +392,7 @@ module.exports = class TorrentListController {
       // remove torrent from saved list
       this.state.saved.torrents.splice(index, 1)
       dispatch('stateSave')
+      dispatch('processDownloadQueue')
 
       // prevent user from going forward to a deleted torrent
       this.state.location.clearForward('player')

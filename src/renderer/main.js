@@ -265,8 +265,9 @@ const dispatchHandlers = {
     controllers.torrentList().toggleSelectTorrent(infoHash),
   openTorrentContextMenu: (infoHash) =>
     controllers.torrentList().openTorrentContextMenu(infoHash),
-  startTorrentingSummary: (torrentKey) =>
-    controllers.torrentList().startTorrentingSummary(torrentKey),
+  startTorrentingSummary: (torrentKey, opts) =>
+    controllers.torrentList().startTorrentingSummary(torrentKey, opts),
+  processDownloadQueue: () => controllers.torrentList().processDownloadQueue(),
   saveTorrentFileAs: (torrentKey) =>
     controllers.torrentList().saveTorrentFileAs(torrentKey),
   prioritizeTorrent: (infoHash) => controllers.torrentList().prioritizeTorrent(infoHash),
@@ -424,17 +425,37 @@ function setGlobalTrackers () {
   controllers.torrentList().setGlobalTrackers(state.getGlobalTrackers())
 }
 
-// Starts all torrents that aren't paused on program startup
+// Starts at most one download on startup (FIFO queue; skip finished / queued placeholders).
 function resumeTorrents () {
-  state.saved.torrents
-    .map((torrentSummary) => {
-      // Torrent keys are ephemeral, reassigned each time the app runs.
-      // On startup, give all torrents a key, even the ones that are paused.
-      torrentSummary.torrentKey = state.nextTorrentKey++
-      return torrentSummary
-    })
-    .filter((s) => s.status !== 'paused')
-    .forEach((s) => controllers.torrentList().startTorrentingSummary(s.torrentKey))
+  const list = controllers.torrentList()
+  const withKeys = state.saved.torrents.map((torrentSummary) => {
+    torrentSummary.torrentKey = state.nextTorrentKey++
+    return torrentSummary
+  })
+
+  let seenActive = false
+  for (const s of withKeys) {
+    if (s.status === 'finished' || s.status === 'queued') continue
+    if (['downloading', 'new'].includes(s.status) || (s.status === 'paused' && list.torrentNeedsDownload(s))) {
+      if (seenActive) {
+        s.status = 'paused'
+      } else {
+        seenActive = true
+      }
+    }
+  }
+  if (seenActive) dispatch('stateSave')
+
+  for (const s of withKeys) {
+    if (s.status === 'finished' || s.status === 'queued') continue
+    if (!list.hasEarlierNotFinished(s) &&
+        (s.status === 'downloading' ||
+          (s.status === 'paused' && list.torrentNeedsDownload(s)))) {
+      if (s.status === 'paused') s.status = 'downloading'
+      list.startTorrentingSummary(s.torrentKey)
+      break
+    }
+  }
 }
 
 // Set window dimensions to match video dimensions or fill the screen

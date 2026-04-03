@@ -11,25 +11,46 @@ module.exports = class TorrentController {
   }
 
   torrentParsed (torrentKey, infoHash, magnetURI) {
+    const torrents = this.state.saved.torrents
     let torrentSummary = this.getTorrentSummary(torrentKey)
+
+    // Same torrent re-added (e.g. paused then played): IPC key type or session key
+    // may not match even though the list entry already has this infoHash.
+    if (!torrentSummary && infoHash) {
+      torrentSummary = torrents.find((t) => TorrentSummary.infoHashesEqual(t.infoHash, infoHash))
+      if (torrentSummary) {
+        torrentSummary.torrentKey = torrentKey
+      }
+    }
+
     console.log('got infohash for %s torrent %s',
       torrentSummary ? 'existing' : 'new', torrentKey)
 
     if (!torrentSummary) {
-      const torrents = this.state.saved.torrents
-
-      // Check if an existing (non-active) torrent has the same info hash
-      if (torrents.find((t) => t.infoHash === infoHash)) {
+      // Check if an existing torrent has the same info hash (any casing)
+      if (torrents.some((t) => TorrentSummary.infoHashesEqual(t.infoHash, infoHash))) {
         ipcRenderer.send('wt-stop-torrenting', infoHash)
         return dispatch('error', 'Cannot add duplicate torrent')
       }
 
+      // createTorrent / seed path (no addTorrent placeholder)
       torrentSummary = {
         torrentKey,
         status: 'new'
       }
-      torrents.unshift(torrentSummary)
+      torrents.push(torrentSummary)
       sound.play('ADD')
+    }
+
+    const duplicate = torrents.find(
+      (t) => t !== torrentSummary && TorrentSummary.infoHashesEqual(t.infoHash, infoHash))
+    if (duplicate) {
+      if (!torrentSummary.infoHash) {
+        const idx = torrents.indexOf(torrentSummary)
+        if (idx !== -1) torrents.splice(idx, 1)
+      }
+      ipcRenderer.send('wt-stop-torrenting', infoHash)
+      return dispatch('error', 'Cannot add duplicate torrent')
     }
 
     torrentSummary.infoHash = infoHash
@@ -51,8 +72,14 @@ module.exports = class TorrentController {
 
     const torrentSummary = this.getTorrentSummary(torrentKey)
     if (torrentSummary) {
-      console.log('Pausing torrent %s due to error: %s', torrentSummary.infoHash, message)
-      torrentSummary.status = 'paused'
+      if (!torrentSummary.infoHash) {
+        const torrents = this.state.saved.torrents
+        const idx = torrents.indexOf(torrentSummary)
+        if (idx !== -1) torrents.splice(idx, 1)
+      } else {
+        console.log('Pausing torrent %s due to error: %s', torrentSummary.infoHash, message)
+        torrentSummary.status = 'paused'
+      }
       dispatch('update')
     }
   }
@@ -82,9 +109,19 @@ module.exports = class TorrentController {
   }
 
   torrentDone (torrentKey, torrentInfo) {
-    // Update the torrent summary
     const torrentSummary = this.getTorrentSummary(torrentKey)
-    torrentSummary.status = 'seeding'
+    if (!torrentSummary) return
+
+    torrentSummary.status = 'finished'
+    if (torrentSummary.progress) {
+      torrentSummary.progress = Object.assign({}, torrentSummary.progress, {
+        progress: 1,
+        downloadSpeed: 0,
+        uploadSpeed: 0
+      })
+    }
+
+    ipcRenderer.send('wt-stop-torrenting', torrentSummary.infoHash)
 
     // Notify the user that a torrent finished, but only if we actually DL'd at least part of it.
     // Don't notify if we merely finished verifying data files that were already on disk.
@@ -96,7 +133,7 @@ module.exports = class TorrentController {
       ipcRenderer.send('downloadFinished', getTorrentPath(torrentSummary))
     }
 
-    dispatch('update')
+    dispatch('processDownloadQueue')
   }
 
   torrentProgress (progressInfo) {

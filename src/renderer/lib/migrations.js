@@ -35,6 +35,11 @@ function run (state) {
     installHandlers(state.saved)
   }
 
+  // Downloads no longer stay in "seeding" — treat old saves as finished (not uploading).
+  saved.torrents.forEach((ts) => {
+    if (ts.status === 'seeding') ts.status = 'finished'
+  })
+
   // Config is now on the new version
   state.saved.version = config.APP_VERSION
 }

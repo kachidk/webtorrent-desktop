@@ -94,7 +94,15 @@ module.exports = class TorrentList extends React.Component {
     let progElems
     if (torrentSummary.error) {
       progElems = [getErrorMessage(torrentSummary)]
-    } else if (torrentSummary.status !== 'paused' && prog) {
+    } else if (torrentSummary.status === 'finished' && prog) {
+      progElems = [
+        renderDownloadCheckbox(),
+        renderTorrentStatus(),
+        renderProgressBar(),
+        renderPercentProgress(),
+        renderTotalProgress()
+      ]
+    } else if (torrentSummary.status !== 'paused' && torrentSummary.status !== 'queued' && torrentSummary.status !== 'finished' && prog) {
       progElems = [
         renderDownloadCheckbox(),
         renderTorrentStatus(),
@@ -120,8 +128,8 @@ module.exports = class TorrentList extends React.Component {
     return (<div key='metadata' className='metadata'>{elements}</div>)
 
     function renderDownloadCheckbox () {
-      const infoHash = torrentSummary.infoHash
-      const isActive = ['downloading', 'seeding'].includes(torrentSummary.status)
+      const toggleId = torrentSummary.infoHash || torrentSummary.torrentKey
+      const isActive = torrentSummary.status === 'downloading'
       return (
         <Checkbox
           key='download-button'
@@ -135,8 +143,9 @@ module.exports = class TorrentList extends React.Component {
             height: 20
           }}
           checked={isActive}
+          disabled={!toggleId}
           onClick={stopPropagation}
-          onCheck={dispatcher('toggleTorrent', infoHash)}
+          onCheck={toggleId ? dispatcher('toggleTorrent', toggleId) : () => {}}
         />
       )
     }
@@ -203,9 +212,13 @@ module.exports = class TorrentList extends React.Component {
 
     function renderTorrentStatus () {
       let status
-      if (torrentSummary.status === 'paused') {
+      if (torrentSummary.status === 'queued') {
+        status = 'Queued'
+      } else if (torrentSummary.status === 'finished') {
+        status = 'Complete'
+      } else if (torrentSummary.status === 'paused') {
         if (!torrentSummary.progress) status = ''
-        else if (torrentSummary.progress.progress === 1) status = 'Not seeding'
+        else if (torrentSummary.progress.progress === 1) status = 'Complete'
         else status = 'Paused'
       } else if (torrentSummary.status === 'downloading') {
         if (!torrentSummary.progress) status = ''
@@ -227,7 +240,9 @@ module.exports = class TorrentList extends React.Component {
 
     // Only show the play/dowload buttons for torrents that contain playable media
     let playButton
-    if (!torrentSummary.error && TorrentPlayer.isPlayableTorrentSummary(torrentSummary)) {
+    if (!torrentSummary.error &&
+        torrentSummary.status !== 'queued' &&
+        TorrentPlayer.isPlayableTorrentSummary(torrentSummary)) {
       playButton = (
         <i
           key='play-button'

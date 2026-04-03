@@ -3,7 +3,8 @@ module.exports = {
   getTorrentPath,
   getByKey,
   getTorrentId,
-  getFileOrFolder
+  getFileOrFolder,
+  infoHashesEqual
 }
 
 const path = require('path')
@@ -40,9 +41,15 @@ function getTorrentId (torrentSummary) {
 // Expects a torrentKey or infoHash
 // Returns the corresponding torrentSummary, or undefined
 function getByKey (state, torrentKey) {
-  if (!torrentKey) return undefined
+  if (torrentKey == null || torrentKey === '') return undefined
   return state.saved.torrents.find((x) =>
-    x.torrentKey === torrentKey || x.infoHash === torrentKey)
+    (x.torrentKey != null && String(x.torrentKey) === String(torrentKey)) ||
+    x.infoHash === torrentKey)
+}
+
+function infoHashesEqual (a, b) {
+  if (a == null || b == null) return false
+  return String(a).toLowerCase() === String(b).toLowerCase()
 }
 
 // Returns the path to either the file (in a single-file torrent) or the root

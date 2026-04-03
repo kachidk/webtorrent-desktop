@@ -90,7 +90,7 @@ module.exports = class PlaybackController {
 
     // Do not pause active torrents if playing a fully downloaded torrent.
     const torrentSummary = TorrentSummary.getByKey(this.state, infoHash)
-    if (torrentSummary.status === 'seeding') return
+    if (torrentSummary.status === 'finished') return
 
     dispatch('prioritizeTorrent', infoHash)
   }
@@ -250,8 +250,8 @@ module.exports = class PlaybackController {
   startServer (torrentSummary) {
     const state = this.state
 
-    if (torrentSummary.status === 'paused') {
-      dispatch('startTorrentingSummary', torrentSummary.torrentKey)
+    if (torrentSummary.status === 'paused' || torrentSummary.status === 'finished') {
+      dispatch('startTorrentingSummary', torrentSummary.torrentKey, { bypassQueue: true })
       ipcRenderer.once('wt-ready-' + torrentSummary.infoHash,
         () => onTorrentReady())
     } else {
@@ -300,7 +300,7 @@ module.exports = class PlaybackController {
     state.playing.jumpToTime = jumpToTime
 
     // if it's audio, parse out the metadata (artist, title, etc)
-    if (torrentSummary.status === 'paused') {
+    if (torrentSummary.status === 'paused' || torrentSummary.status === 'finished') {
       ipcRenderer.once('wt-ready-' + torrentSummary.infoHash, getAudioMetadata)
     } else {
       getAudioMetadata()

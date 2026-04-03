@@ -102,7 +102,9 @@ function getTorrentStats (state) {
     new: { count: 0, sizeMB: 0 },
     downloading: { count: 0, sizeMB: 0 },
     seeding: { count: 0, sizeMB: 0 },
-    paused: { count: 0, sizeMB: 0 }
+    paused: { count: 0, sizeMB: 0 },
+    finished: { count: 0, sizeMB: 0 },
+    queued: { count: 0, sizeMB: 0 }
   }
 
   // First, count torrents & total file size
@@ -125,7 +127,9 @@ function getTorrentStats (state) {
     new: roundTorrentStats(byStatus.new),
     downloading: roundTorrentStats(byStatus.downloading),
     seeding: roundTorrentStats(byStatus.seeding),
-    paused: roundTorrentStats(byStatus.paused)
+    paused: roundTorrentStats(byStatus.paused),
+    finished: roundTorrentStats(byStatus.finished),
+    queued: roundTorrentStats(byStatus.queued)
   }
   return ret
 }

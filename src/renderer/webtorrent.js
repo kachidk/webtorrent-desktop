@@ -162,13 +162,14 @@ function addTorrentEvents (torrent) {
 
   function torrentDone () {
     const info = getTorrentInfo(torrent)
-    ipcRenderer.send('wt-done', torrent.key, info)
-
     updateTorrentProgress()
 
+    // Send modtimes before wt-done so the renderer can stop the torrent without racing getFileModtimes.
     torrent.getFileModtimes((err, fileModtimes) => {
-      if (err) return onError(err)
-      ipcRenderer.send('wt-file-modtimes', torrent.key, fileModtimes)
+      if (!err) {
+        ipcRenderer.send('wt-file-modtimes', torrent.key, fileModtimes)
+      }
+      ipcRenderer.send('wt-done', torrent.key, info)
     })
   }
 }
