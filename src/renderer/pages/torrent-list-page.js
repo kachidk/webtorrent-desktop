@@ -25,7 +25,7 @@ module.exports = class TorrentList extends React.Component {
         </div>
       )
     }
-    const torrentElems = state.saved.torrents.map(
+    const torrentElems = [...state.saved.torrents].reverse().map(
       (torrentSummary) => this.renderTorrent(torrentSummary)
     )
     contents.push(...torrentElems)
