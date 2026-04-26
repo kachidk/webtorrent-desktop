@@ -27,6 +27,7 @@ const electron = require('electron')
 const fs = require('fs')
 const React = require('react')
 const ReactDOM = require('react-dom')
+const remote = require('@electron/remote')
 
 const config = require('../config')
 const telemetry = require('./lib/telemetry')
@@ -127,14 +128,16 @@ function onState (err, _state) {
   // Give global trackers
   setGlobalTrackers()
 
-  // Restart everything we were torrenting last time the app ran
-  resumeTorrents()
+  assignTorrentKeys()
 
   // Initialize ReactDOM
   ReactDOM.render(
     <App state={state} ref={elem => { app = elem }} />,
     document.querySelector('#body')
   )
+
+  // Restart everything we were torrenting last time the app ran
+  resumeTorrents()
 
   // Calling update() updates the UI given the current state
   // Do this at least once a second to give every file in every torrentSummary
@@ -172,7 +175,7 @@ function onState (err, _state) {
   window.addEventListener('focus', onFocus)
   window.addEventListener('blur', onBlur)
 
-  if (electron.remote.getCurrentWindow().isVisible()) {
+  if (remote.getCurrentWindow().isVisible()) {
     sound.play('STARTUP')
   }
 
@@ -425,16 +428,18 @@ function setGlobalTrackers () {
   controllers.torrentList().setGlobalTrackers(state.getGlobalTrackers())
 }
 
+function assignTorrentKeys () {
+  state.saved.torrents.forEach((torrentSummary) => {
+    torrentSummary.torrentKey = state.nextTorrentKey++
+  })
+}
+
 // Starts at most one download on startup (FIFO queue; skip finished / queued placeholders).
 function resumeTorrents () {
   const list = controllers.torrentList()
-  const withKeys = state.saved.torrents.map((torrentSummary) => {
-    torrentSummary.torrentKey = state.nextTorrentKey++
-    return torrentSummary
-  })
 
   let seenActive = false
-  for (const s of withKeys) {
+  for (const s of state.saved.torrents) {
     if (s.status === 'finished' || s.status === 'queued') continue
     if (['downloading', 'new'].includes(s.status) || (s.status === 'paused' && list.torrentNeedsDownload(s))) {
       if (seenActive) {
@@ -446,7 +451,7 @@ function resumeTorrents () {
   }
   if (seenActive) dispatch('stateSave')
 
-  for (const s of withKeys) {
+  for (const s of state.saved.torrents) {
     if (s.status === 'finished' || s.status === 'queued') continue
     if (!list.hasEarlierNotFinished(s) &&
         (s.status === 'downloading' ||
@@ -461,7 +466,7 @@ function resumeTorrents () {
 // Set window dimensions to match video dimensions or fill the screen
 function setDimensions (dimensions) {
   // Don't modify the window size if it's already maximized
-  if (electron.remote.getCurrentWindow().isMaximized()) {
+  if (remote.getCurrentWindow().isMaximized()) {
     state.window.bounds = null
     return
   }
@@ -473,7 +478,7 @@ function setDimensions (dimensions) {
     width: window.outerWidth,
     height: window.outerHeight
   }
-  state.window.wasMaximized = electron.remote.getCurrentWindow().isMaximized
+  state.window.wasMaximized = remote.getCurrentWindow().isMaximized
 
   // Limit window size to screen size
   const screenWidth = window.screen.width
