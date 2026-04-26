@@ -8,6 +8,7 @@ const { dispatch } = require('../lib/dispatcher')
 module.exports = class TorrentController {
   constructor (state) {
     this.state = state
+    this.lastProgressSave = 0
   }
 
   torrentParsed (torrentKey, infoHash, magnetURI) {
@@ -155,6 +156,12 @@ module.exports = class TorrentController {
       }
       torrentSummary.progress = p
     })
+
+    const now = Date.now()
+    if (now - this.lastProgressSave > 5000) {
+      this.lastProgressSave = now
+      dispatch('stateSave')
+    }
 
     // TODO: Find an efficient way to re-enable this line, which allows subtitle
     //       files which are completed after a video starts to play to be added

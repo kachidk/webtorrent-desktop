@@ -220,6 +220,7 @@ function lazyLoadCast () {
 // 4. controller - the controller handles the event, changing the state object
 function update () {
   controllers.playback().showOrHidePlayerControls()
+  if (!app) return
   app.setState(state)
   updateElectron()
 }
@@ -271,6 +272,8 @@ const dispatchHandlers = {
   startTorrentingSummary: (torrentKey, opts) =>
     controllers.torrentList().startTorrentingSummary(torrentKey, opts),
   processDownloadQueue: () => controllers.torrentList().processDownloadQueue(),
+  reorderTorrent: (torrentKey, targetTorrentKey, position) =>
+    controllers.torrentList().reorderTorrent(torrentKey, targetTorrentKey, position),
   saveTorrentFileAs: (torrentKey) =>
     controllers.torrentList().saveTorrentFileAs(torrentKey),
   prioritizeTorrent: (infoHash) => controllers.torrentList().prioritizeTorrent(infoHash),
@@ -332,6 +335,7 @@ const dispatchHandlers = {
   // Navigation between screens (back, forward, ESC, etc)
   exitModal: () => { state.modal = null },
   backToList,
+  showDownloading,
   escapeBack,
   back: () => state.location.back(),
   forward: () => state.location.forward(),
@@ -413,6 +417,16 @@ function backToList () {
   })
 }
 
+function showDownloading () {
+  state.location.go({
+    url: 'downloading',
+    setup: (cb) => {
+      state.window.title = 'Downloading'
+      cb(null)
+    }
+  })
+}
+
 // Quits modals, full screen, or goes back. Happens when the user hits ESC
 function escapeBack () {
   if (state.modal) {
@@ -461,6 +475,8 @@ function resumeTorrents () {
       break
     }
   }
+
+  if (!seenActive) list.processDownloadQueue()
 }
 
 // Set window dimensions to match video dimensions or fill the screen

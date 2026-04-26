@@ -64,7 +64,7 @@ module.exports = class SubtitlesController {
   checkForSubtitles () {
     if (this.state.playing.type !== 'video') return
     const torrentSummary = this.state.getPlayingTorrentSummary()
-    if (!torrentSummary || !torrentSummary.progress) return
+    if (!torrentSummary || !torrentSummary.progress || !torrentSummary.progress.files) return
 
     torrentSummary.progress.files.forEach((fp, ix) => {
       if (fp.numPieces !== fp.numPiecesPresent) return // ignore incomplete files

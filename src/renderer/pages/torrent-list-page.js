@@ -102,17 +102,23 @@ module.exports = class TorrentList extends React.Component {
         renderPercentProgress(),
         renderTotalProgress()
       ]
-    } else if (torrentSummary.status !== 'paused' && torrentSummary.status !== 'queued' && torrentSummary.status !== 'finished' && prog) {
+    } else if (prog) {
       progElems = [
         renderDownloadCheckbox(),
         renderTorrentStatus(),
         renderProgressBar(),
         renderPercentProgress(),
-        renderTotalProgress(),
-        renderPeers(),
-        renderSpeeds(),
-        renderEta()
+        renderTotalProgress()
       ]
+      if (torrentSummary.status !== 'paused' &&
+          torrentSummary.status !== 'queued' &&
+          torrentSummary.status !== 'finished') {
+        progElems.push(
+          renderPeers(),
+          renderSpeeds(),
+          renderEta()
+        )
+      }
     } else {
       progElems = [
         renderDownloadCheckbox(),
@@ -217,16 +223,17 @@ module.exports = class TorrentList extends React.Component {
       } else if (torrentSummary.status === 'finished') {
         status = 'Complete'
       } else if (torrentSummary.status === 'paused') {
-        if (!torrentSummary.progress) status = ''
-        else if (torrentSummary.progress.progress === 1) status = 'Complete'
+        if (torrentSummary.progress && torrentSummary.progress.progress === 1) status = 'Complete'
         else status = 'Paused'
       } else if (torrentSummary.status === 'downloading') {
-        if (!torrentSummary.progress) status = ''
+        if (!torrentSummary.progress) status = 'Downloading'
         else if (!torrentSummary.progress.ready) status = 'Verifying'
         else status = 'Downloading'
       } else if (torrentSummary.status === 'seeding') {
         status = 'Seeding'
-      } else { // torrentSummary.status is 'new' or something unexpected
+      } else if (torrentSummary.status === 'new') {
+        status = 'Loading torrent info...'
+      } else { // torrentSummary.status is something unexpected
         status = ''
       }
       return (<span key='torrent-status'>{status}</span>)

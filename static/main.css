@@ -211,6 +211,10 @@ table {
   margin-top: -3px;
 }
 
+.header .downloading {
+  margin-right: 8px;
+}
+
 /*
  * CONTENT
  */
@@ -226,6 +230,98 @@ table {
 
 .app.view-player .content {
   margin-top: 0;
+}
+
+.downloading-page {
+  margin: 0 auto;
+  max-width: 720px;
+  width: 100%;
+}
+
+.downloading-active,
+.downloading-empty {
+  color: #aaa;
+  margin: 0 25px;
+}
+
+.downloading-list {
+  margin-top: 20px;
+  padding-top: 10px;
+}
+
+.downloading-active {
+  border-bottom: 1px solid #333;
+  padding: 16px 40px 16px 0;
+  position: relative;
+  transition: padding 0.3s ease-out;
+}
+
+.downloading-active.is-drag-over {
+  padding: 32px 56px 32px 16px;
+}
+
+.downloading-active:first-child {
+  padding-top: 0;
+}
+
+.downloading-active .downloading-item-button {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.downloading-active .downloading-item-button:hover {
+  cursor: grab;
+}
+
+.downloading-active .downloading-item-button:active {
+  cursor: grabbing;
+}
+
+.downloading-active .name {
+  color: #eee;
+  font-size: 20px;
+  font-weight: bold;
+  margin-bottom: 6px;
+}
+
+.downloading-active .downloading-status-row {
+  margin-bottom: 12px;
+}
+
+.downloading-active .status {
+  vertical-align: 0.35em;
+}
+
+.downloading-active .downloading-delete-button {
+  display: inline-block;
+  margin-left: 8px;
+  margin-top: -1px;
+  opacity: 0;
+  text-align: center;
+  vertical-align: top;
+  width: 24px;
+}
+
+.downloading-active:hover .downloading-delete-button {
+  opacity: 0.85;
+}
+
+.downloading-active .bar {
+  background: #444;
+  border-radius: 2px;
+  height: 8px;
+  overflow: hidden;
+}
+
+.downloading-active .fill {
+  background: #ddd;
+  height: 100%;
+}
+
+.downloading-active .details {
+  margin-top: 8px;
 }
 
 /*

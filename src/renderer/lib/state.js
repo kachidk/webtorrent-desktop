@@ -248,15 +248,20 @@ async function saveImmediate (state, cb) {
 
   // Clean up, so that we're not saving any pending state
   const copy = Object.assign({}, state.saved)
-  // Remove torrents pending addition to the list, where we haven't finished
-  // reading the torrent file or file(s) to seed & don't have an infohash
+  // Remove incomplete transient entries, but keep queued placeholders so they
+  // survive app restarts before WebTorrent has assigned an infohash.
   copy.torrents = copy.torrents
-    .filter((x) => x.infoHash)
+    .filter((x) => x.infoHash || x.pendingTorrentId || x.pendingCreateOptions)
     .map(x => {
       const torrent = {}
       for (const key in x) {
-        if (key === 'progress' || key === 'torrentKey') {
-          continue // Don't save progress info or key for the webtorrent process
+        if (key === 'progress') {
+          const progress = getSavedProgress(x.progress)
+          if (progress) torrent.progress = progress
+          continue
+        }
+        if (key === 'torrentKey') {
+          continue // Don't save key for the webtorrent process
         }
         if (key === 'error') {
           continue // Don't save error states
@@ -271,5 +276,19 @@ async function saveImmediate (state, cb) {
     State.emit('stateSaved')
   } catch (err) {
     console.error(err)
+  }
+}
+
+function getSavedProgress (progress) {
+  if (!progress) return null
+
+  return {
+    progress: progress.progress,
+    downloaded: progress.downloaded,
+    length: progress.length,
+    ready: progress.ready,
+    numPeers: 0,
+    downloadSpeed: 0,
+    uploadSpeed: 0
   }
 }

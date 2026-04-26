@@ -412,7 +412,7 @@ function renderLoadingSpinner (state) {
   let fileProgress = 0
   if (prog.files) {
     const file = prog.files[state.playing.fileIndex]
-    fileProgress = Math.floor(100 * file.numPiecesPresent / file.numPieces)
+    if (file) fileProgress = Math.floor(100 * file.numPiecesPresent / file.numPieces)
   }
 
   return (
@@ -480,6 +480,7 @@ function renderCastScreen (state) {
     if (!prog.files) return
 
     const fileProg = prog.files[state.playing.fileIndex]
+    if (!fileProg) return
     const fileProgress = fileProg.numPiecesPresent / fileProg.numPieces
     const fileLength = state.getPlayingFileSummary().length
     const fileDownloaded = fileProgress * fileLength
@@ -927,7 +928,7 @@ function renderLoadingBar (state) {
   if (config.IS_TEST) return // Don't integration test the loading bar. Screenshots won't match.
 
   const torrentSummary = state.getPlayingTorrentSummary()
-  if (!torrentSummary.progress) {
+  if (!torrentSummary.progress || !torrentSummary.progress.files) {
     return null
   }
 

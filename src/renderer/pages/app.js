@@ -13,6 +13,7 @@ const TorrentListPage = require('./torrent-list-page')
 
 const Views = {
   home: createGetter(() => TorrentListPage),
+  downloading: createGetter(() => require('./downloading-page')),
   player: createGetter(() => require('./player-page')),
   'create-torrent': createGetter(() => require('./create-torrent-page')),
   preferences: createGetter(() => require('./preferences-page'))

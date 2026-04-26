@@ -47,6 +47,7 @@ module.exports = class TorrentListController {
     }
     this.state.saved.torrents.push(summary)
     sound.play('ADD')
+    dispatch('stateSave')
 
     peekTorrentId(torrentId, (err, peek) => {
       const s = TorrentSummary.getByKey(this.state, torrentKey)
@@ -75,6 +76,7 @@ module.exports = class TorrentListController {
       }
 
       dispatch('update')
+      dispatch('stateSave')
     })
 
     dispatch('backToList')
@@ -117,6 +119,7 @@ module.exports = class TorrentListController {
     }
     state.saved.torrents.push(summary)
     sound.play('ADD')
+    dispatch('stateSave')
 
     if (!this.hasEarlierNotFinished(summary)) {
       summary.status = 'new'
@@ -222,6 +225,59 @@ module.exports = class TorrentListController {
     }
   }
 
+  reorderTorrent (torrentId, targetTorrentId, position) {
+    const torrents = this.state.saved.torrents
+    const fromIndex = torrents.findIndex((t) => matchesTorrentId(t, torrentId))
+    if (fromIndex === -1) return
+
+    const [torrentSummary] = torrents.splice(fromIndex, 1)
+    const targetIndex = torrents.findIndex((t) => matchesTorrentId(t, targetTorrentId))
+    if (targetIndex === -1) {
+      torrents.splice(fromIndex, 0, torrentSummary)
+      return
+    }
+
+    const insertIndex = position === 'after' ? targetIndex + 1 : targetIndex
+    torrents.splice(insertIndex, 0, torrentSummary)
+    this.queueReorderedTorrent(torrentSummary)
+    this.activateFirstDownload()
+    dispatch('stateSave')
+    dispatch('update')
+  }
+
+  queueReorderedTorrent (torrentSummary) {
+    if (torrentSummary.status === 'finished') return
+    if (!this.torrentNeedsDownload(torrentSummary)) return
+    if (['downloading', 'paused', 'new'].includes(torrentSummary.status)) {
+      torrentSummary.status = 'queued'
+      if (torrentSummary.infoHash) {
+        ipcRenderer.send('wt-stop-torrenting', torrentSummary.infoHash)
+      }
+    }
+  }
+
+  activateFirstDownload () {
+    const torrentSummary = this.state.saved.torrents.find((t) => {
+      return ['queued', 'downloading', 'paused', 'new'].includes(t.status) &&
+        this.torrentNeedsDownload(t)
+    })
+    if (!torrentSummary) return
+
+    if (torrentSummary.status === 'downloading') {
+      this.pauseOtherActiveTorrents(torrentSummary.torrentKey)
+      return
+    }
+
+    if (torrentSummary.status === 'queued') {
+      this.activateQueuedTorrent(torrentSummary, { queueOthers: true })
+      return
+    }
+
+    this.queueOtherActiveTorrents(torrentSummary.torrentKey)
+    torrentSummary.status = 'new'
+    this.startTorrentingSummary(torrentSummary.torrentKey)
+  }
+
   /**
    * Move a queued torrent into WebTorrent (pause any other downloader first).
    * @returns {boolean} true if this summary was started
@@ -234,7 +290,9 @@ module.exports = class TorrentListController {
       const id = t.pendingTorrentId
       delete t.pendingTorrentId
       t.status = 'new'
-      if (this.hasAnyOtherDownloading(key)) {
+      if (options.queueOthers) {
+        this.queueOtherActiveTorrents(key)
+      } else if (this.hasAnyOtherDownloading(key)) {
         this.pauseOtherActiveTorrents(key)
       }
       ipcRenderer.send('wt-start-torrenting', key, id, downloadPath)
@@ -246,7 +304,9 @@ module.exports = class TorrentListController {
       const opts = t.pendingCreateOptions
       delete t.pendingCreateOptions
       t.status = 'new'
-      if (this.hasAnyOtherDownloading(key)) {
+      if (options.queueOthers) {
+        this.queueOtherActiveTorrents(key)
+      } else if (this.hasAnyOtherDownloading(key)) {
         this.pauseOtherActiveTorrents(key)
       }
       ipcRenderer.send('wt-create-torrent', key, opts)
@@ -254,7 +314,13 @@ module.exports = class TorrentListController {
       return true
     }
 
-    return false
+    t.status = 'new'
+    if (options.queueOthers) {
+      this.queueOtherActiveTorrents(key)
+    }
+    this.startTorrentingSummary(key)
+    if (options.playSound) sound.play('ENABLE')
+    return true
   }
 
   setGlobalTrackers (globalTrackers) {
@@ -331,6 +397,17 @@ module.exports = class TorrentListController {
     })
   }
 
+  queueOtherActiveTorrents (keepTorrentKey) {
+    const keep = String(keepTorrentKey)
+    this.state.saved.torrents.forEach((torrentSummary) => {
+      if (String(torrentSummary.torrentKey) === keep) return
+      if (torrentSummary.status === 'downloading') {
+        torrentSummary.status = 'queued'
+        ipcRenderer.send('wt-stop-torrenting', torrentSummary.infoHash)
+      }
+    })
+  }
+
   prioritizeTorrent (infoHash) {
     this.state.saved.torrents
       .filter(torrent => torrent.status === 'downloading') // Active torrents only.
@@ -381,9 +458,8 @@ module.exports = class TorrentListController {
     }
   }
 
-  // TODO: use torrentKey, not infoHash
-  deleteTorrent (infoHash, deleteData) {
-    const index = this.state.saved.torrents.findIndex((x) => x.infoHash === infoHash)
+  deleteTorrent (torrentId, deleteData) {
+    const index = this.state.saved.torrents.findIndex((x) => matchesTorrentId(x, torrentId))
 
     if (index > -1) {
       const summary = this.state.saved.torrents[index]
@@ -398,7 +474,7 @@ module.exports = class TorrentListController {
       this.state.location.clearForward('player')
       sound.play('DELETE')
     } else {
-      throw new TorrentKeyNotFoundError(infoHash)
+      throw new TorrentKeyNotFoundError(torrentId)
     }
   }
 
@@ -515,6 +591,12 @@ module.exports = class TorrentListController {
   }
 }
 
+function matchesTorrentId (torrentSummary, torrentId) {
+  const id = String(torrentId)
+  return (torrentSummary.torrentKey != null && String(torrentSummary.torrentKey) === id) ||
+    torrentSummary.infoHash === id
+}
+
 // Recursively finds {name, path, size} for all files in a folder
 // Calls `cb` on success, calls `onError` on failure
 function findFilesRecursive (paths, cb_) {
@@ -575,7 +657,9 @@ function showItemInFolder (torrentSummary) {
 }
 
 function deleteTorrentFile (torrentSummary, deleteData) {
-  ipcRenderer.send('wt-stop-torrenting', torrentSummary.infoHash)
+  if (torrentSummary.infoHash) {
+    ipcRenderer.send('wt-stop-torrenting', torrentSummary.infoHash)
+  }
 
   // remove torrent and poster file
   deleteFile(TorrentSummary.getTorrentPath(torrentSummary))

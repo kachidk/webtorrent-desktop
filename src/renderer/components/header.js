@@ -37,6 +37,7 @@ class Header extends React.Component {
           </i>
         </div>
         <div className='nav right float-right'>
+          {this.getDownloadingButton()}
           {this.getAddButton()}
         </div>
       </div>
@@ -47,6 +48,22 @@ class Header extends React.Component {
     if (process.platform !== 'darwin') return null
     const state = this.props.state
     return (<div className='title ellipsis'>{state.window.title}</div>)
+  }
+
+  getDownloadingButton () {
+    const state = this.props.state
+    if (state.location.url() === 'downloading') return null
+    return (
+      <i
+        className='icon downloading'
+        title='Downloading'
+        onClick={dispatcher('showDownloading')}
+        role='button'
+        aria-label='Downloading'
+      >
+        menu
+      </i>
+    )
   }
 
   getAddButton () {
